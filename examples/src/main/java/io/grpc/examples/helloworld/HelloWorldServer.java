@@ -31,11 +31,25 @@
 
 package io.grpc.examples.helloworld;
 
+import java.io.IOException;
+import java.util.concurrent.atomic.AtomicLong;
+import java.util.logging.Logger;
+
+import io.grpc.Attributes;
+import io.grpc.Attributes.Key;
+import io.grpc.BindableService;
+import io.grpc.Context;
+import io.grpc.Contexts;
+import io.grpc.Metadata;
 import io.grpc.Server;
 import io.grpc.ServerBuilder;
+import io.grpc.ServerCall;
+import io.grpc.ServerCall.Listener;
+import io.grpc.ServerCallHandler;
+import io.grpc.ServerInterceptor;
+import io.grpc.ServerInterceptors;
+import io.grpc.ServerTransportFilter;
 import io.grpc.stub.StreamObserver;
-import java.io.IOException;
-import java.util.logging.Logger;
 
 /**
  * Server that manages startup/shutdown of a {@code Greeter} server.
@@ -45,14 +59,46 @@ public class HelloWorldServer {
 
   private Server server;
 
+  static Context.Key<String>    CONTEXT_CONVERSATION_ID = Context.key("convid");
+  static Attributes.Key<String> ATTRIBUTES_CONVERSATION_ID = Key.of("convid");
+
+  static class ConvIdServerInterceptor implements ServerInterceptor {
+      @Override
+      public <ReqT, RespT> Listener<ReqT> interceptCall(final ServerCall<ReqT, RespT> call, final Metadata headers,
+              final ServerCallHandler<ReqT, RespT> next) {
+          Context context = Context.current().withValue(CONTEXT_CONVERSATION_ID, call.getAttributes().get(ATTRIBUTES_CONVERSATION_ID));
+          return Contexts.interceptCall(context, call, headers, next);
+      }
+  }
+
+  static class ConvIdServerTransportFilter extends ServerTransportFilter {
+      AtomicLong id = new AtomicLong(0);
+
+      @Override
+      public Attributes transportReady(Attributes transportAttrs) {
+          Attributes myAttributes = Attributes.newBuilder(transportAttrs).set(ATTRIBUTES_CONVERSATION_ID, "my_conversation_" + (id.incrementAndGet())).build();
+          return super.transportReady(myAttributes);
+      }
+
+      @Override
+      public void transportTerminated(Attributes transportAttrs) {
+          System.out.println("Conversation " + transportAttrs.get(ATTRIBUTES_CONVERSATION_ID) + " has been disconnected!");
+          super.transportTerminated(transportAttrs);
+      }
+  }
+
   private void start() throws IOException {
     /* The port on which the server should run */
     int port = 50051;
+    BindableService bs = new GreeterImpl();
+
     server = ServerBuilder.forPort(port)
-        .addService(new GreeterImpl())
+        .addService(ServerInterceptors.intercept(new GreeterImpl(), new ConvIdServerInterceptor()))
+        .addTransportFilter(new ConvIdServerTransportFilter())
         .build()
         .start();
-    logger.info("Server started, listening on " + port);
+
+    logger.info("yop Server started, listening on " + port);
     Runtime.getRuntime().addShutdownHook(new Thread() {
       @Override
       public void run() {
@@ -92,6 +138,8 @@ public class HelloWorldServer {
 
     @Override
     public void sayHello(HelloRequest req, StreamObserver<HelloReply> responseObserver) {
+      System.out.println("Conversation " + CONTEXT_CONVERSATION_ID.get() + " is saying hello!");
+
       HelloReply reply = HelloReply.newBuilder().setMessage("Hello " + req.getName()).build();
       responseObserver.onNext(reply);
       responseObserver.onCompleted();

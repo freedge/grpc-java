@@ -92,6 +92,8 @@ public class HelloWorldClient {
         user = args[0]; /* Use the arg as the name to greet if provided */
       }
       client.greet(user);
+      client.greet(user);
+      Thread.sleep(1800000);
     } finally {
       client.shutdown();
     }
